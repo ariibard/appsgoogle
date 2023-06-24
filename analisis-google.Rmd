@@ -1,0 +1,1696 @@
+---
+title: "Trabajo Final - Estadística Aplicada a la Investigación de Mercado"
+author: "Ariana Bard"
+output: 
+  html_document:
+    code_download: true
+    toc: TRUE
+    toc_float: TRUE
+    css: hoja_estilo_tp.css
+    number_sections: true
+    theme: "flatly"
+    highlight: textmate
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning =FALSE,message = FALSE)
+
+#EDA
+library(tidyverse)
+library(readr)
+library(janitor)
+library(gt)
+library(plotly)
+library(RColorBrewer)
+library(gridExtra)
+library(lubridate)
+library(kableExtra)
+library(skimr)
+library(robustHD)
+library(data.table)
+
+
+#valores nulos
+library(naniar)
+library(mice)
+library(visdat)
+
+#para el grafico waffle
+library(waffle)
+
+#Arbol de decisión
+library(rpart)
+library(rpart.plot)
+library(rattle)
+
+# curva ROC
+library(pROC)
+library(caret)
+
+
+#evitar la notación científica
+options(scipen=999)
+```
+
+El objetivo de este trabajo final es utilizar DOS técnicas de las que se
+vieron durante la materia **Estadística Aplicada a la Investigación de
+Mercado.**
+
+# Aplicaciones de Google Play Store
+
+La base de datos fue extraida de kaggle[^1], se trata de un dataset
+público construido a partir de webscrapping con el objetivo de analizar
+el mercado de las aplicaciones de android. La misma fue publicada hace 4
+años por Lavanya Gupta.
+
+[^1]: <https://www.kaggle.com/datasets/lava18/google-play-store-apps>
+
+**Las variables que posee el dataframe son las siguientes**. Es
+importante resaltar que toda esta información es de cuando fue
+escrapeada la base. Es decir en 2019.
+
+| Variable          | Descripción                                                                 |
+|----------------------|--------------------------------------------------|
+| `Apps`            | Nombre de la aplicación                                                     |
+| `Category`        | Categoría a la que pertenece la app                                         |
+| `Rating`          | Puntaje que los usuarios le dieron a la app                                 |
+| `Reviews`         | Cantidad de comentarios de la app                                           |
+| `Size`            | Tamaño de la app                                                            |
+| `Installs`        | Cantidad de usuarios que descargaron la app                                 |
+| `Type`            | Si es paga (paid) o gratuita (free)                                         |
+| `Price`           | Precio de la app                                                            |
+| `Content Raiting` | Grupo de edad para la cual es la app (Children/Mature +21/ Adult /Everyone) |
+| `Genres`          | Genero de la App. Una App puede pertenecer a multiples generos              |
+| `Last Updated`    | Fecha de la última actualización                                            |
+| `Current Ver`     | Versión actual de la aplicación que se encuentra disponible en playstore    |
+| `Android Ver`     | Versión mínima de android necesaria para descargar la app                   |
+
+: Variables y descripción
+
+**La Asociación por el Derecho al Acceso (ADA)** quiere desarrollar una
+aplicación de Google Playstore que sirva para promocionar y difundir el
+derecho al acceso a la información, por eso necesitan conocer el mercado
+de aplicaciones de Google Playstore
+
+El **objetivo** de este trabajo es analizar las características del
+mercado de las aplicaciones alojadas en Google Play Store para saber
+cómo influyen las mismas en la popularidad de las aplicaciones (medido
+por el número de instalaciones). De esta manera, se buscará investigar
+el mercado de las App para decidir qué variables habría que tener en
+cuenta para hacer de esta app popular. ¿Debería ser un juego o un
+aplicativo informativo? ¿Bajo qué rotulo sería conveniente
+clasificarla?.
+
+En este marco, el trabajo se estructura de la siguiente manera: En
+primer lugar, se realiza el análisis exploratorio y la limpieza de los
+datos. En segundo lugar, se exploran cuáles son las características que
+contribuyen a la popularidad de las aplicaciones. Por último, se tratará
+de predecir la popularidad de las apps (medido por las instalaciones)
+
+# Análisis exploratorio y transformación de las variables
+
+Comenzamos por levantar la base de datos y explorar sus variables[^2]:
+
+[^2]: <https://www.kaggle.com/code/akwamfoneventus/google-play-store-app-prep-cleaning-r>
+
+    <https://www.kaggle.com/code/arstby/app-store-games-eda/report>
+
+```{r}
+#Cargamos la base y limpiamos los nombres del dataset 
+apps <-  read_csv("Data/googleplaystore.csv") 
+
+
+bd_apps <- apps %>% 
+  clean_names()
+
+#visualizamos los primeros valores
+head(bd_apps) %>% 
+  gt()
+
+
+```
+
+Composición de las variables:
+
+```{r}
+#visualizamos las variables 
+bd_apps %>% 
+  skimr::skim()
+
+# variables por tipo 
+bd_apps %>% vis_dat(warn_large_data = F)
+
+#valores perdidos
+vis_miss(bd_apps)
+#solo hay en rating
+```
+
+Se observa que de 13 columnas, 12 contienen variables de tipo
+"character" y 2 númericas. A continuación vamos a reconvertir algunas
+variables.
+
+`Rating` es la única variable que posee missings en su composición, esto
+se debe a que en otras variables como `size` o `android version` se
+encuentra el valor "*varies with device*" que será reemplazado por NA.
+Además existen valores repetidos. Por lo que nos quedamos sólo con los
+valores únicos
+
+```{r}
+nrow(bd_apps %>%
+  distinct())
+
+
+
+bd_apps <- bd_apps %>% 
+  distinct()
+```
+
+```{r}
+bd_apps %>% 
+  filter(installs == "Free") %>% 
+  gt()
+
+```
+
+Eliminamos esta observación dado que tiene un `rating` que supera los 5
+puntos y una categoría que no coincide con la del resto de las apps.
+
+Las variable instalaciones, precio y tamaño poseen caracteres. Vamos a
+transformarlas para su posterior utilización. Respecto de `size` la
+variable contiene "M" (MB) o "K" (KB). Asimismo se observa que existe el
+valor *"varies with device"* . Esto es debido a que Google Play permite
+publicar diferentes APK para cada aplicación. Cada uno dirigido a una
+configuración de dispositivo diferente. Por lo que, al seleccionar
+"instalar" el sistema Android selecciona los recursos apropiados para el
+dispositivo. Para poder convertir esta variable a numérica se pasará
+todo a KB. Es decir multiplicando los MB \* 1000, dado que 1 MB = 1000
+KB. Sucede lo mismo con `Android versión` que posee valores
+correspondientes a *"varies with device"*
+
+```{r}
+
+#pasamos a formato fecha la variable last_updated
+bd_apps <- bd_apps %>%
+  filter(app != "Life Made WI-Fi Touchscreen Photo Frame") %>% 
+  mutate(last_updated = mdy(last_updated),
+         installs = gsub("\\+",'',installs), #eliminamos los simbolos 
+         installs = gsub(",",'',installs),
+         installs = as.numeric(installs),
+         reviews = as.numeric(reviews), #pasamos a numérico
+         price = as.numeric(gsub("\\$", "", as.character(price))), #eliminamos los simbolos
+         android_ver = gsub("Varies with device", NA, android_ver), #varies with device lo pasamos a NA
+    android_ver = as.numeric(substr(android_ver, start = 1, stop = 3)),
+     size_num = ifelse(grepl("M", size), as.numeric(sub("([0-9\\.]+)M", "\\1", size))*1000, as.numeric(sub("([0-9\\.]+)k", "\\1", size)))) %>% #dejamos un solo decimal 
+  filter(type %in% c("Free", "Paid"))
+    # Hay dos apps que tienen 0 o NA, vamos a eliminarlas y quedarnos solo con las que tienen Free o PAID en Type
+  
+bd_apps %>% 
+  skimr::skim()
+```
+
+#### Type
+
+```{r}
+
+#transformamos type a binaria
+bd_apps$type_bin <- ifelse(bd_apps$type == "Paid", 1, 0)
+
+#mostramos el resultado
+g2 <- bd_apps %>% 
+  group_by(type) %>% 
+  summarise(N=n()) %>% 
+  ggplot(aes(N, reorder(type,N))) +
+  geom_col(fill = "#009999") +
+  theme_classic() +
+  labs(x = " ",
+       y = " ",
+       title = "Distribución de aplicaciones por tipo (pago/gratuito") 
+
+
+ggplotly(g2)
+
+```
+
+La variable `type` muestra si la aplicación es paga o gratuita, para
+poder utilizarla en los análisis la transformaremos en una variable
+binaria asignandole 1 si es paga y 0 si es gratuita
+
+#### Content raiting
+
+Vamos a modificar esta variable para generar rangos de edad
+
+```{r}
+bd_apps <- bd_apps %>%
+  mutate(grupo_edades =  case_when(content_rating == "Everyone" ~ "4+",
+                                     content_rating == "Everyone 10+" ~ "9+",
+                                     content_rating == "Teen" ~ "12+",
+                                     content_rating == "Mature 17+" ~ "17+",
+                                     content_rating == "Unrated" ~ "9+",
+                                   content_rating == "Adults only 18+" ~ "17+"))
+
+bd_apps %>% 
+  filter(content_rating == "Unrated") %>% 
+  gt()
+
+g1 <- bd_apps %>% 
+  group_by(grupo_edades) %>% 
+  summarise(N=n()) %>% 
+  ggplot(aes(N, reorder(grupo_edades,N))) +
+  geom_col(fill = "#009999") +
+  theme_classic() +
+  labs(x = "Número de aplicaciones",
+       y = "Grupo de edades",
+       title = "Distribución de aplicaciones por grupo de edades") 
+
+
+ggplotly(g1)
+
+```
+
+Hay dos apps sin calificar que son Best CG Photography y DC Universe
+Online Map. como son herramientas, vamos a clasificarlas como "Everyone"
+osea +9. Hay solo 3 aplicaciones que corresponden a +18, se las
+incorporará a +17.
+
+```{r}
+
+#vemos la distribución de los grupos de edad en las apps
+edades <- bd_apps %>%
+    group_by(grupo_edades) %>%
+    summarize(Total = n()) %>%
+    mutate(perc = round(Total/sum(Total) * 100)) %>%
+    arrange(-perc)
+
+perc_counts <- edades$perc
+names(perc_counts) <- edades$grupo_edades
+
+# Graficamos
+
+waffle(perc_counts) + 
+  theme_minimal() +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_blank(),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Porcentaje de apps por grupos de edad")
+
+
+
+```
+
+```{r eval = FALSE }
+rm(edades)
+rm(perc_counts)
+```
+
+La mayoría de las aplicaciones está catalogada como "Everyone" o apta
+para mayores de 4 años.
+
+#### genres
+
+```{r}
+bd_apps %>%
+  group_by(genres) %>%
+  summarise(n = n()) %>% 
+  head(15) %>% 
+  gt()
+
+#exploramos las etiquetas, dividimos las etiquetas 
+
+generos <- bd_apps %>%
+  separate_rows(genres, sep = ";") %>% 
+ # separate_rows(genres, sep = "&") %>% 
+  count(genres) %>% 
+  arrange(desc(n))
+
+g3 <- ggplot(generos, aes(x = genres, y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  xlab("Género") +
+  ylab("Frecuencia") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Géneros",
+       y = "N° de apps",
+       title = "Distribución de aplicaciones por género") 
+
+
+ggplotly(g3)
+
+```
+
+La variable `genres` contiene etiquetas que definen el género de la
+aplicación. Es decir una app puede tener más de una etiqueta. Debido a
+la cantidad de categorías que posee la variable se decide eliminarla
+para el desarrollo de los posteriores modelos
+
+### Valores Nulos
+
+```{r}
+# Valores nulos
+
+md.pattern(bd_apps, rotate.names = TRUE, plot = TRUE)
+
+# Visualización de perdidos
+gg_miss_var(bd_apps, show_pct = T)
+
+#Analizamos el patrón de los valores nulos
+gg_miss_upset(bd_apps,nsets = 10)
+```
+
+Se observa que hay un patrón en los datos faltantes de `android_ver` ,
+`rating` y `size_num` por lo que no es posible eliminar los valores
+nulos.
+
+#### Rating
+
+Más arriba se observó que la variable `rating` tiene valores nulos.
+Observamos la distribución de estos valores en relación a la cantidad de
+descargas
+
+```{r}
+
+t2 <- bd_apps %>% 
+  filter(is.na(rating)) %>% 
+  count(reviews) %>% 
+  mutate(porcentaje = round(n/1474*100, 2),
+         porcentaje_acumulado = cumsum(porcentaje)) 
+
+
+#analizamos los ratings por cantidad de reviews
+
+t1 <- bd_apps %>% 
+  filter(is.na(rating)) %>% 
+  count(installs) %>% 
+  mutate(porcentaje = round(n/1474*100, 2),
+         porcentaje_acumulado = cumsum(porcentaje)) 
+
+kable(list(t1, t2))
+
+
+
+```
+
+El 80% de las aplicaciones que poseen missings en la variable `rating`
+tienen menos de 500 descargas y menos de 10 reviews. Esto se puede deber
+a que como fueron poco descargadas todavía la gente no las ha puntuado o
+algún error en el webscrapping.
+
+```{r eval=FALSE, echo=FALSE}
+rm(t1)
+rm(t2)
+```
+
+#### Tamaño (size)
+
+```{r}
+bd_apps %>% 
+  group_by(size_num) %>% 
+  summarise(N= n()) %>% 
+  arrange(desc(N)) %>% 
+  head() %>% 
+  gt()
+
+```
+
+De 10356 registros 1525 (15%) no poseen un tamaño definido por lo
+expresado más arriba. Vamos a ver la distribución de esta variable:
+
+```{r}
+# histograma de la variable "size"
+p1<- ggplot(bd_apps, aes(x = size_num)) + 
+  geom_histogram(color="black", fill="lightblue", binwidth = 5000) +
+  labs(title = "Distribución del tamaño de las aplicaciones",
+       x = "Tamaño (KB)", y = "Frecuencia") +
+  theme_minimal() +
+  theme(plot.title = element_text(size=14, face="bold"),
+        axis.title.x = element_text(size=12),
+        axis.title.y = element_text(size=12),
+        axis.text = element_text(size=10))
+
+# densidad de la variable "size"
+p2 <-ggplot(bd_apps, aes(x = size_num)) + 
+  geom_density(color="black", fill="lightblue") +
+  labs(x = "Tamaño (KB)", y = "Densidad") +
+  theme_minimal() +
+  theme(plot.title = element_text(size=14, face="bold"),
+        axis.title.x = element_text(size=12),
+        axis.title.y = element_text(size=12),
+        axis.text = element_text(size=10))
+
+grid.arrange(p1, p2, ncol=2) 
+
+
+```
+
+```{r eval=FALSE, echo=FALSE}
+rm(p1)
+rm(p2)
+```
+
+#### Android version
+
+Hay 1352 filas que contienen NA porque corresponde a la categoría
+"*varies with devices".*
+
+```{r}
+bd_apps %>%
+  group_by(android_ver) %>%
+  summarise(n = n()) %>%
+  ggplot(aes(x = as.factor(android_ver), y = n, fill = android_ver)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Versión de Android", y = "Frecuencia", fill = "Versión de Android") +
+  theme_classic()
+```
+
+#### current_ver
+
+```{r}
+bd_apps %>%
+  group_by(current_ver) %>%
+  summarise(n = n()) %>% 
+  arrange(desc(n)) %>% 
+  head() %>% 
+  gt()
+
+
+
+```
+
+La variable `current_ver` tiene 2833 valores únicos, el 25% de los
+registros. Esto sugiere que no es muy informativa. Además, no puede ser
+convertida a numérica ya que es una variable categorica que indica la
+versión actual de la aplicación. **No siempre el número de versión es un
+número continuo.** Por este motivo se decide prescindir de esta variable
+para el posterior análisis
+
+[A continuación utilizaremos la técnica de imputación múltiple del
+paquete ´mice´ para los valores nulos]{.underline}
+
+```{r,results='hide'}
+
+#Imputamos los NA
+
+imp <- mice(bd_apps[, c("size_num", "rating", "android_ver")])
+
+```
+
+```{r}
+
+# Visualizamos la distribución de variables antes y después de la imputación
+kableExtra::kable(summary(bd_apps[, c("size_num", "rating", "android_ver")]),caption = "Extructura variables previo a imputar")
+kableExtra::kable(summary(complete(imp)[, c("size_num", "rating", "android_ver")]),caption = "Extructura variables imputadas")
+
+
+# Agregamos las variables originales a la base imputada
+bd_apps_imputed <- cbind(bd_apps[, setdiff(colnames(bd_apps), colnames(imp))], complete(imp))
+
+# Renombrar las columnas imputadas
+colnames(bd_apps_imputed)[17:19] <- paste0(colnames(bd_apps_imputed)[17:19], "_imp")
+
+#sacamos las variables que no nos sirven o las ya imputadas y creamos la base que se va a utilizar para el desarrollo de la consigna
+df_apps <- bd_apps_imputed %>% 
+  select(-rating,
+         -size,
+         -size_num,
+         -android_ver,
+         -content_rating,
+         -current_ver)
+
+# Verificamos la estructura de la nueva base de datos
+skimr::skim(df_apps)
+
+
+```
+
+```{r eval=FALSE, echo=FALSE}
+#eliminamos los datasets 
+rm(bd_apps)
+rm(bd_apps_imputed)
+rm(apps)
+
+```
+
+Volvemos a ver cómo quedó la estructura de los valores nulos
+
+```{r}
+# variables por tipo 
+df_apps %>% vis_dat(warn_large_data = F)
+
+#valores perdidos
+vis_miss(df_apps)
+
+
+```
+
+```{r eval= FALSE, echo=FALSE}
+rm(imp)
+```
+
+### Valores Atípicos
+
+A continuación `boxplot.stats` calcula el límite inferior y superior de
+cada variable, y luego suma los valores que se encuentran por debajo y
+por encima del limite superior
+
+```{r}
+count_outliers <- function(x) {
+  bp <- boxplot.stats(x)
+  sum(x < bp$stats[1] | x > bp$stats[5])
+}
+
+bd_numerico <- df_apps %>% 
+  select_if(is.numeric)
+
+
+
+# Contamos los outliers en la base de datos de ejemplo
+sapply(bd_numerico, count_outliers)
+
+
+# Boxplots
+
+plot1 <- ggplot(df_apps, aes(y = installs)) + 
+  geom_boxplot(aes(fill = "installs")) +
+  scale_fill_manual(values = '#FF689f', guide= FALSE) +
+  ggtitle("Boxplot para la variable installs") +
+  ylab("Cantidad") +
+  theme_classic()
+
+plot2 <- ggplot(df_apps, aes(y = price)) + 
+  geom_boxplot(aes(fill = "price")) +
+  scale_fill_manual(values = '#DC71FA', guide= FALSE) +
+  ggtitle("Boxplot para la variable price") +
+  ylab("Cantidad") +
+  theme_classic()
+
+plot3 <- ggplot(df_apps, aes(y = rating_imp )) + 
+  geom_boxplot(aes(fill = "rating_imp")) +
+  scale_fill_manual(values = '#00ABFD', guide= FALSE) +
+  ylab("Cantidad") +
+  theme_classic() + 
+  ggtitle("Boxplot para la variable raiting")
+
+# Boxplot de type_bin
+plot4 <- ggplot(df_apps, aes(x = "", y = reviews)) +
+  geom_boxplot(aes(fill = "reviews")) +
+  scale_fill_manual(values = '#00C1AA', guide= FALSE)+
+  ggtitle("Boxplot de type_bin")+
+  ylab("Cantidad") +
+  theme_classic()
+
+plot5 <- ggplot(df_apps, aes(y = size_num_imp)) + 
+  geom_boxplot(aes(fill = "size_num_imp")) +
+  scale_fill_manual(values = '#39B600', guide= FALSE)+
+  ggtitle("Boxplot para la variable size_num") +
+  ylab("Tamaño en MB") +
+  theme_classic()
+
+
+plot6 <-ggplot(df_apps, aes(y = android_ver_imp  )) + 
+  geom_boxplot(aes(fill = "android_ver_imp")) +
+  scale_fill_manual(values = '#F37B59', guide= FALSE)+
+  ggtitle("Boxplot para la variable android version") +
+  ylab("Cantidad") +
+  theme_classic()
+
+grid.arrange(plot1, plot2, plot3, plot4, plot5, plot6, ncol = 2)
+
+
+
+```
+
+Se observa presencia de outliers en la mayoría de las variables
+numéricas. Esto se debe a la dispersión de los datos y no a un error en
+la medición. Es decir, hay aplicaciones con mayor precio o cantidad de
+instalaciones que otras. El caso de `typebin` es porque es una variable
+binaria por lo que no conviene imputar los outliers para no generar
+cambios en su distribución.
+
+En la variable `price` existen valores atípicos porque gran parte de la
+muestra de apps es gratuita. En este caso se decide no imputar esos
+valores, ya que son legítimos y representan el precio real de las
+aplicaciones.
+
+```{r eval=FALSE, echo=FALSE}
+#Eliminamos para optimizar memoria
+rm(plot1)
+rm(plot2)
+rm(plot3)
+rm(plot4)
+rm(plot5)
+rm(plot6)
+```
+
+```{r}
+quantile(df_apps$price, na.rm=TRUE)
+```
+
+El 75% de las apps son gratuitas. Para los análisis posteriores se
+decidió omitir esta variable. Se utilizará solo `type`, es decir si la
+aplicación es paga o gratuita
+
+```{r}
+df_apps <- df_apps %>% 
+  select(-price)
+```
+
+`Reviews`
+
+```{r}
+ggplot(df_apps, aes(x = reviews)) +
+  geom_histogram(bins = 30, color = "black", fill = "lightblue") + 
+  labs(title = "Histograma de Reviews", x = "Número de Reviews", y = "Frecuencia")
+  
+
+summary(df_apps$reviews)
+```
+
+Se puede ver que la mayoría de las apps tienen pocas reviews. El 50%
+tiene 1683 o menos. Por lo que se observa que hay algunos outliers.
+También se puede observar que hay una gran variabilidad en la cantidad
+de reseñas, con una media de 405944 y un valor máximo de 78158306, lo
+que sugiere la presencia de outliers
+
+Reemplazar los outliers de variables como `rating` y `android_ver` no la
+consideramos apropiada debido a que, la primera solo tiene valores del 1
+al 5; y, la segunda del 1 al 8.
+
+```{r}
+plot1 <- ggplot(df_apps, aes(x = rating_imp)) +
+  geom_histogram(binwidth = 0.5, fill = "#00ABFD", color = "white") +
+  ggtitle("Distribución de Rating") +
+  xlab("Rating") +
+  ylab("Frecuencia") +
+  theme_classic()
+
+plot_3 <- ggplot(df_apps, aes(x = rating_imp)) +
+  geom_density(fill = "#00ABFD", color = "white") +
+  ggtitle("Densidad de rating") +
+  xlab("Rating") +
+  ylab("Densidad") +
+  theme_classic()
+
+
+plot2 <- ggplot(df_apps, aes(x = android_ver_imp)) +
+  geom_histogram(binwidth = 0.5, fill = "#00ABFD", color = "white") +
+  ggtitle("Distribución de android_ver") +
+  xlab("version android") +
+  ylab("Frecuencia") +
+  theme_classic()
+
+plot4 <- ggplot(df_apps, aes(x = android_ver_imp)) +
+  geom_density(fill = "#00ABFD", color = "white") +
+  ggtitle("Densidad de android_ver") +
+  xlab("versión android") +
+  ylab("Densidad") +
+  theme_classic()
+
+grid.arrange(plot1, plot_3, plot2,plot4, ncol =2 )
+
+
+```
+
+A continuación se imputarán los valores atípicos para las variables
+`installs`, `reviews` y `size` a través de `winzonrize` del paquete
+`robustHD` para reducir el impacto de los valores extremos o atípicos.
+Esta técnica se utiliza para reemplazar los outliers por los valores mas
+cercanos.
+
+```{r eval=FALSE, echo=FALSE }
+rm(plot1)
+rm(plot_3)
+rm(plot2)
+rm(plot4)
+```
+
+```{r}
+
+#imputamos los outliers
+
+df_final <- df_apps %>%
+  mutate(installs = winsorize(installs, probs = c(0.05, 0.95)),
+         reviews = winsorize(reviews, probs = c(0.05, 0.95)),
+         size_num_imp = winsorize(size_num_imp, probs = c(0.05, 0.95)))
+
+
+
+```
+
+```{r eval=FALSE, echo=FALSE}
+#eliminamos df_apps
+rm(df_apps)
+
+```
+
+Analizamos la nueva distribución:
+
+```{r}
+bd_numerico2 <- df_final %>% 
+  select_if(is.numeric)
+
+# Contar los outliers en la base de datos de ejemplo
+sapply(bd_numerico2, count_outliers)
+
+# Crear el boxplot
+plot1 <- ggplot(df_final, aes(y = installs)) + 
+  geom_boxplot(aes(fill = "installs")) +
+  scale_fill_manual(values = '#FF689f', guide= FALSE) +
+  ggtitle("Boxplot para la variable installs") +
+  ylab("Cantidad") +
+  theme_classic()
+
+
+plot5 <- ggplot(df_final, aes(y = size_num_imp)) + 
+  geom_boxplot(aes(fill = "size_num_imp")) +
+  scale_fill_manual(values = '#39B600', guide= FALSE)+
+  ggtitle("Boxplot para la variable size_num") +
+  ylab("Tamaño en MB") +
+  theme_classic()
+
+plot6 <-ggplot(df_final, aes(y = reviews  )) + 
+  geom_boxplot(aes(fill = "reviews")) +
+  scale_fill_manual(values = '#F37B59', guide= FALSE)+
+  ggtitle("Boxplot para la variable android version") +
+  ylab("Cantidad") +
+  theme_classic()
+
+grid.arrange(plot1,plot5, plot6, ncol = 1)
+
+
+```
+
+```{r eval=FALSE, echo=FALSE}
+rm(plot1)
+rm(plot5)
+rm(plot6)
+rm(bd_numerico)
+rm(bd_numerico2)
+```
+
+### Popularidad \~ Instalaciones
+
+#### Categorías
+
+```{r}
+
+g <- df_final %>% 
+  group_by(category) %>% 
+  summarise(N = n()) %>% 
+  ggplot(aes(x = category, y = N, size = N, color = category)) +
+  geom_point() +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(x = "", y = " ", title = "Cantidad de apps por categoría") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold")) +
+  theme(legend.position = "none") 
+
+
+
+ggplotly(g)
+rm(g)
+```
+
+Se puede observar que de las categorías existentes la mayoría de las
+apps se encuentran clasificadas como Family, Game y Tools. A
+continuación se analizan cuales son las categorías más instaladas:
+
+```{r}
+g <- df_final %>% 
+  group_by(category) %>% 
+  summarise(descargas = sum(installs)) %>% 
+  ggplot(aes(x = reorder(category,-descargas), y = descargas, size = descargas, color = category)) +
+  geom_point() +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(x = "", y = " ", title = "Categorías más populares (Cantidad de instalaciones)", caption = "En millones de descargas") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold")) +
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::comma)
+
+# bd_apps %>% 
+#   group_by(category) %>% 
+#   summarise(descargas = sum(installs)) %>% 
+#   arrange(desc(descargas))
+
+ggplotly(g)
+rm(g)
+```
+
+Se puede observar que las categorías más populares son GAME y FAMILY
+
+#### Tipo de app (gratuita o paga)
+
+```{r}
+g4 <- ggplot(df_final, aes(x=type, y=installs, fill=type)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(labels = scales::comma) +
+  theme_classic() +
+  ggtitle(label = "Boxplot instalaciones por tipo") +
+  guides(fill=FALSE)
+
+ggplotly(g4)
+
+rm(g4)
+```
+
+Las aplicaciones gratuitas son mas instaladas en general
+
+#### Grupo de edades
+
+```{r}
+# Convertir a gráfico interactivo
+p <- ggplot(df_final, aes(x = reorder(grupo_edades,installs), y = installs)) +
+  geom_bar(stat = "identity", fill = "#FB8072") +
+  labs(title = "Cantidad de instalaciones por grupos de edades",
+       x = "Grupos de Edades", y = "Cantidad de instalaciones") +
+  theme_classic() 
+
+ggplotly(p)
+rm(p)
+```
+
+Se puede observar que las apps más descargadas son las habilitadas para
++4 años (toda la familia)
+
+#### Rating
+
+```{r}
+
+p <- df_final %>% 
+  mutate(rating_imp = round(rating_imp,0)) %>% 
+  ggplot(aes(x = reorder(rating_imp,installs), y = installs)) +
+  geom_bar(stat = "identity", fill = "#FB8072") +
+  labs(title = "Cantidad de instalaciones por rating",
+       x = "Rating", y = "Cantidad de instalaciones") +
+  theme_classic() 
+
+ggplotly(p)
+rm(p)
+```
+
+Las apps con mayor cantidad de instalaciones son las que tienen un
+puntaje de 4 estrellas.
+
+#### tamaño
+
+```{r}
+ggplot(df_final, aes(x = installs, y = size_num_imp, fill = size_num_imp)) +
+  geom_boxplot(fill = "#FB8072") + theme_classic()  +
+  scale_y_continuous(labels = scales::comma) +
+  ylab("Instalaciones") +
+  xlab("Tamaño") +
+  ggtitle("Relación entre tamaño y cantidad de instalaciones") 
+
+
+```
+
+Las apps con mayor cantidad de instalaciones se encuentran entre 10000 y
+30000 KB
+
+#### Actualización
+
+```{r}
+plot1 <- df_final %>%
+  group_by(last_updated) %>%
+  summarise(total_installs = sum(installs)) %>%
+  ggplot(aes(x = last_updated, y = total_installs)) +
+  geom_line(color = "#FF689f", size = 1) +
+  labs(x = "Fecha de actualización", y = "Instalaciones", 
+       title = "Total de instalaciones por fecha de actualización") +
+  theme_classic() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_text(size = 12, face = "bold"),
+        legend.title = element_blank(),
+        legend.position = "none")
+
+ggplotly(plot1)
+
+
+```
+
+Se puede observar que las aplicaciones más populares son las que poseen
+actualización más reciente (2018). Por lo que, para incluirla en los
+analisis convertimos la variable a año. Armamos una variable que sea
+"Año de actualización" para poder incluirla en los análisis posteriores
+
+```{r}
+df_final <- df_final %>% 
+  mutate(ano_act = year(last_updated))
+
+#observamos la distribución por año
+df_final %>% 
+  group_by(ano_act) %>% 
+  summarise(N=n()) %>% 
+  gt()
+```
+
+# Análisis de la popularidad de las Apps de Google Play Store
+
+### Árbol de decisión [^3]
+
+[^3]: <https://www.kaggle.com/code/gabydel1982/telco-customer-churn-rboles-de-decisi-n>
+
+El **árbol de decisión** es un modelo de aprendizaje automático que
+divide los datos en subconjuntos más pequeños basados en diferentes
+características y reglas. El objetivo es encontrar las variables que
+tienen la mayor influencia en la popularidad (medido por la cantidad de
+instalaciones) de una aplicación, para así encarar el desarrollo de la
+aplicación que contribuya a difundir el *derecho de acceso* de la mejor
+manera. De esta manera, se buscará identificar las variables más
+importantes para explicar la variabilidad de la variable objetivo.
+
+**Analizamos la correlación entre las variables numéricas:**
+
+```{r}
+
+#Guardamos el CSV
+write.csv(df_final, "df_final.csv")
+
+#armamos una matriz de correlación 
+matriz_df <- df_final %>% 
+  select_if(is.numeric)
+
+matriz_df <- cor(matriz_df)
+matriz_df
+
+c1 <- matriz_df %>% 
+  ggcorrplot:::ggcorrplot(type = "lower",  lab=TRUE, hc.order = TRUE, title = "Matriz de correlación R", colors = c("#6D9EC1", "white", "purple")) +
+  theme(text = element_text(size = 10),
+        axis.text.x =  element_text(angle=90, hjust=1, size = 7),
+        axis.text.y =  element_text(size = 7))
+
+ggplotly(c1)
+
+
+#Borramos los datasets para optimizar memoria
+rm(c1)
+rm(matriz_df)
+
+```
+
+La variable con más correlación positiva es `reviews`
+
+#### Preparación y estandarización de las variables
+
+Creamos una variable llamada `popular` con la variable `installs` para
+luego comparar con qué variable el modelo predice mejor.
+
+```{r eval = FALSE}
+#Borramos los datasets para optimizar memoria
+rm(plot1)
+rm(count_outliers)
+rm(fa_apps)
+```
+
+```{r}
+#convertimos a factor las variables categóricas
+
+
+
+### Distribución de la variable installs
+df_final %>% 
+  group_by(installs) %>% 
+  summarise(N=n()) %>% 
+  gt() %>% 
+  tab_header(title = "Apps por cantidad de instalaciones")
+
+#Creo variables dummys y estandarizo las variables
+df_accesin <- df_final %>% 
+  mutate(category = as.factor(category),
+         grupo_edades = as.factor(grupo_edades),
+         ano_act = as.factor(ano_act),
+         popular = ifelse(installs >= 100000, 1,0)) %>%
+  select(-last_updated, -type, -genres)%>%  
+  recipes::step_scale(all_numeric(), except = c("type_bin","popular", "installs")) %>% 
+  select(-steps)
+
+
+#df_accesin %>% group_by(android_ver_imp) %>% summarise(N=n())
+#ponemos el nombre de la app como nombre de la fila 
+df_accesin$app <- paste0(seq_len(nrow(df_accesin)), "_", df_accesin$app)
+rownames(df_accesin) <- df_accesin$app
+
+
+df_accesin_cat <- df_accesin %>% 
+  select_if(is.factor) 
+
+#Creating Dummy Variables
+dummy<- data.frame(sapply(df_accesin_cat,function(x) data.frame(model.matrix(~x-1,data =df_accesin_cat))[,-1]))
+
+dummy %>% 
+  head(10) %>% 
+  gt()
+
+df_accesin_int <- df_accesin %>% 
+  select_if(is.numeric) 
+
+df_analisis <- cbind(df_accesin_int,dummy)
+
+##Creamos un dataset con la variable popular y otro con la variable installs
+df_popular <- df_analisis %>% 
+  select(-installs)
+
+accesin_final <- df_analisis %>% 
+  select(-popular)
+
+```
+
+```{r eval=FALSE, echo=FALSE}
+#Borramos los datasets para optimizar memoria
+rm(df_accesin_int)
+rm(df_accesin_cat)
+rm(dummy)
+
+```
+
+Observamos la matriz de correlación con las variables binarias
+
+```{r}
+matriz_df <- accesin_final %>% 
+  select_if(is.numeric)
+
+matriz_df <- cor(matriz_df)
+
+c1 <- matriz_df %>% 
+  ggcorrplot:::ggcorrplot(type = "full",  lab=FALSE, hc.order = FALSE, colors = c("#6D9EC1", "white", "purple"), ggtheme = ggplot2::theme_classic) +
+  ggtitle("Matriz de correlación R") +
+  theme(text = element_text(size = 5),
+        axis.text.x =  element_text(angle=90, hjust=1, size = 5),
+        axis.text.y =  element_text(size = 5))
+
+ggplotly(c1)
+
+```
+
+Las variables con mayor correlación son
+
+```{r}
+# Seleccionar las columnas que tienen una correlación mayor a 0.5
+  
+cols_sel <- matriz_df %>%
+  abs() %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "var1") %>%
+  pivot_longer(cols = -var1, names_to = "var2", values_to = "cor") %>%
+  filter(var1 != var2 & cor > 0.3) %>% 
+  arrange(desc(cor))
+
+cols_sel %>% 
+  gt() %>% 
+  tab_header(title = "Variables con mayor correlación")
+```
+
+#### Creamos el dataset de train y test
+
+```{r}
+
+#Creamos el dataset de train y test 
+
+#fijamos una semilla
+set.seed(583)
+n <- nrow(accesin_final)
+train_idx <- sample(1:n, n*0.7, replace = FALSE) # 70% para entrenamiento
+train <- accesin_final[train_idx, ]
+test <- accesin_final[-train_idx, ]
+
+n_train = nrow(train)
+
+#visualizamos la distribución
+train %>% 
+  group_by(installs) %>% 
+  summarise(Prop = round(n()/n_train,3)) %>% 
+  gt() %>%
+  tab_options(page.width = "100") %>%
+  tab_header(title = "Proporción de Instalaciones")
+
+
+```
+
+#### Modelo 1
+
+```{r}
+
+#creamos el modelo
+model <- rpart(installs ~., data = train, method = 'class')
+
+#Graficamos
+rpart.plot(model, main = "Árbol de clasificación", extra = 101, under = TRUE, branch.lty = 1, shadow.col = "gray") 
+
+#resumen del modelo creado
+summary(model)
+```
+
+El resultado del primer modelo muestra que las variables con mayor
+importancia son (en el siguiente orden): `reviews`, `size_num_imp`,
+`ano_act.x2018`, `category.xGAME`, `grupo_edades.x4.`, `rating_imp`,
+`type`
+
+```{r}
+# Aplicamos el modelo a los datos de prueba
+predict_test <- predict(model, test, type = "class") 
+
+# Creamos una tabla de contingencia para evaluar la precisión
+table_mat <- table(test$installs, predict_test)
+table_mat
+
+# Calculamos la precisión del modelo
+accuracy_train <- function(fit) {
+    predict_unseen_train <- predict(fit, train, type = 'class')
+    table_mat <- table(train$installs, predict_unseen_train)
+    accuracy_train <- sum(diag(table_mat)) / sum(table_mat)
+    accuracy_train
+}
+
+
+accuracy_test <- function(fit) {
+    predict_unseen <- predict(fit, test, type = 'class')
+    table_mat <- table(test$installs, predict_unseen)
+    accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+    accuracy_Test
+}
+
+
+print(paste('Accuracy para train', accuracy_train(model)))
+print(paste('Accuracy para test', accuracy_test(model)))
+```
+
+El valor de 0.67 para la exactitud (accuracy) del modelo puede
+considerarse relativamente bueno.
+
+```{r}
+# Obtener las predicciones del modelo en el conjunto de prueba
+pred_test <- predict(model, newdata = test, type = "class")
+
+# Matriz de confusión
+confusionMatrix(table(pred_test, test$installs))
+
+# Tabla de contingencia
+table_test <- table(test$installs, pred_test)
+
+# Precisión por instalaciones
+precision <- diag(table_test) / colSums(table_test)
+
+# Recall por instalaciones
+recall <- diag(table_test) / rowSums(table_test)
+
+# Graficar precision y recall en un gráfico de barras
+barplot(precision, ylim = c(0, 1), main = "Precisión por instalaciones", xlab = "cantidad", ylab = "Precisión")
+barplot(recall, ylim = c(0, 1), main = "Recall por instalaciones", xlab = "cantidad", ylab = "Recall")
+
+
+```
+
+El modelo clasifica correctamente el 67,36% de las muestras. En cuanto a
+la matriz de confusión, muestra que el modelo tiene dificultades para
+clasificar correctamente las clases de muestra más bajas (0, 1 y 5) y
+las clases de muestra más altas (5000, 50000 y 100000).
+
+#### Modelo 2
+
+Vamos a ajustar este modelo en base a `tune` que prueba diferentes
+valores de hiperparámetros y devuelve el conjunto de valores que produce
+el mejor modelo. En este caso se utilizará `cp` para controlar la
+complejidad del modelo:
+
+```{r}
+
+# Define the range of values for the cp parameter
+cp_values <- seq(0.001, 0.1, by = 0.001)
+
+# Create the tuning grid
+tune_grid <- data.frame(cp = cp_values)
+
+# Fit the model with cross-validation and the tuning grid
+fit <- train(
+  installs ~ .,
+  data = train,
+  method = "rpart",
+  tuneGrid = tune_grid,
+  trControl = trainControl(method = "cv", number = 10, verboseIter = TRUE)
+)
+
+model_2 <- rpart(installs ~ ., data = train, method = "class", control = rpart.control(cp = fit$bestTune$cp))
+
+# Plot the decision tree
+rpart.plot(model_2, extra = 1,main = "Arbol" )
+
+summary(model_2)
+
+
+# Obtener las predicciones del modelo en el conjunto de prueba
+pred_test <- predict(model_2, newdata = test, type = "class")
+
+# Matriz de confusión
+confusionMatrix(table(pred_test, test$installs))
+
+predict_test <- predict(model_2, test, type = "class") 
+
+# Creamos una tabla de contingencia para evaluar la precisión
+table_mat <- table(test$installs, predict_test)
+table_mat
+
+print(paste('Accuracy para train', accuracy_train(model_2)))
+print(paste('Accuracy para test', accuracy_test(model_2)))
+
+```
+
+En comparación con el modelo 2, podemos ver que el modelo 1 tiene una
+accuracy menor (67,36% vs 69%), un kappa menor (0,5626 vs 0.5939) y una
+sensibilidad mucho menor para las clases 0, 1, 5 y 50 y una sensibilidad
+mayor para las clases 1000, 50000 y 100000.
+
+El accuracy tanto para `train` como para `test` son similares, lo cual
+es una buena señal de que no hay overfitting o sobreajuste
+
+```{r}
+# Obtener las predicciones del modelo en el conjunto de prueba
+pred_test <- predict(model_2, newdata = test, type = "class")
+
+# Tabla de contingencia
+table_test <- table(test$installs, pred_test)
+
+# Precisión por instalaciones
+precision <- diag(table_test) / colSums(table_test)
+
+# Recall por instalaciones
+recall <- diag(table_test) / rowSums(table_test)
+
+
+
+# Graficar precision y recall en un gráfico de barras
+barplot(precision, ylim = c(0, 1), main = "Precisión por instalaciones", xlab = "cantidad", ylab = "Precisión")
+barplot(recall, ylim = c(0, 1), main = "Recall por instalaciones", xlab = "cantidad", ylab = "Recall")
+
+```
+
+#### Arbol de decisión con la variable popular
+
+Mas arriba se creó una variable `popular` (binaria) en base a `installs`
+a partir de la distribución de la cantidad de instalaciones, aquellas
+apps con **\> 100000** instalaciones se las consideró **populares**. Se
+tratará de predecir la popularidad de las apps en base a esta variable y
+comparar si el modelo predice mejor que con `installs`
+
+```{r}
+#fijamos una semilla
+set.seed(583)
+n <- nrow(df_popular)
+train_idx <- sample(1:n, n*0.7, replace = FALSE) # 70% para entrenamiento
+train_pop <- df_popular[train_idx, ]
+test_pop <- df_popular[-train_idx, ]
+
+n_train = nrow(train_pop)
+train_pop %>% 
+  group_by(popular) %>% 
+  summarise(Prop = round(n()/n_train,3)) %>% 
+  gt() %>%
+  tab_options(page.width = "100") %>%
+  tab_header(title = "Proporción de Instalaciones")
+
+```
+
+Realizamos el modelo:
+
+```{r}
+#creamos el modelo
+model_pop <- rpart(popular ~., data = train_pop, method = 'class')
+
+#Graficamos el arbol
+# fancyRpartPlot(model, type = 1, palettes=c("Greys", "Blues"), main = "Arbol de Clasificación - Modelo 1", caption = "Por la cantidad de instalaciones")
+
+rpart.plot(model_pop, main = "Árbol de clasificación", extra = 101, under = TRUE, branch.lty = 1, shadow.col = "gray") 
+
+#resumen del modelo creado
+summary(model_pop)
+
+predict_test <- predict(model_pop, test_pop, type = "class") 
+
+# Creamos una tabla de contingencia para evaluar la precisión
+table_mat <- table(test_pop$popular, predict_test)
+table_mat
+
+
+accuracy_train <- function(fit) {
+    predict_unseen_train <- predict(fit, train_pop, type = 'class')
+    table_mat <- table(train_pop$popular, predict_unseen_train)
+    accuracy_train <- sum(diag(table_mat)) / sum(table_mat)
+    accuracy_train
+}
+
+
+accuracy_test <- function(fit) {
+    predict_unseen <- predict(fit, test_pop, type = 'class')
+    table_mat <- table(test_pop$popular, predict_unseen)
+    accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+    accuracy_Test
+}
+
+print(paste('Accuracy para train', accuracy_train(model_pop)))
+print(paste('Accuracy para test', accuracy_test(model_pop)))
+
+
+# Obtener las predicciones del modelo en el conjunto de prueba
+pred_test <- predict(model_pop, newdata = test_pop, type = "class")
+
+# Matriz de confusión
+confusionMatrix(table(pred_test, test_pop$popular))
+
+
+predictions <- predict(model_pop, newdata = test, type = "prob")[, 2]
+
+
+roc_curve <- roc(test_pop$popular ~ predictions)
+plot(roc_curve) 
+auc(roc_curve)
+```
+
+Al utilizar la variable dependiente `popular` en lugar de `installs`, el
+modelo no toma en cuenta todas las variabilidades de `installs`. Sin
+embargo, `model_pop` es más preciso para la predicción de la popularidad
+
+Respecto a la **curva ROC**, el AUC es de 0.9405 lo que indica que el
+modelo tiene una buena capacidad para clasificar
+
+La matriz de confusión muestra que el `model_pop` tiene una precisión
+del 94.27%, con una sensibilidad del 92.18% y una especificidad del
+95.92%. Además, Kappa indica una fuerte concordancia entre las
+predicciones del modelo y los valores reales observados.
+
+Las posibles variables predictoras son `reviews` y `ano_act.x2018` junto
+con `size_num_imp`, `rating_imp` y `type_bin`. La precisión del modelo
+es delel 94%, y la probabilidad de clasificación correcta para la 1
+(popular) es de 92.18% y para 0 es de 95.92%. La gratuidad de las apps,
+un rating mayor y las apps con mayor tamaños son las que tienen más
+relación con la popularidad de las apps:
+
+```{r}
+
+p1 <- ggplot(data = train_pop, aes(x = type_bin, y = popular)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Type", y = "Popularidad") + 
+  ggtitle("Popularidad x type")+
+  theme_classic()  +
+  theme(plot.title = element_text(size = 10))
+
+p2 <- ggplot(data = train_pop, aes(x = rating_imp, y = popular)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "rating", y = "") + 
+  ggtitle("Popularidad x rating") + 
+    theme_classic() + 
+    theme(plot.title = element_text(size = 10))
+
+p3 <- ggplot(data = train_pop, aes(x = size_num_imp, y = popular)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "tamaño", y = "") + 
+  ggtitle("Popularidad x tamaño") +
+  theme_classic()  +
+  theme(plot.title = element_text(size = 10))
+
+
+
+cowplot::plot_grid(p1, p2, p3, ncol = 3, align = "h") 
+
+
+
+```
+
+```{r eval = FALSE}
+# Limpiamos memoria 
+rm(fit, model,model_2,model_pop,p1,p2,p3, predict_test, predictions, roc1, roc2, roc_test,roc_curve, test_pop, test, train, train_pop, tune_grid, accuracy, cp_values, n, n_train, precision, pred_test, recall,table_mat, table_test, train_idx, df_analisis, accuracy_test,accuracy_Test,accuracy_train,df_final)
+```
+
+## ¿Se puede predecir la popularidad de una APP?
+
+### Regresión Logística[^4]
+
+[^4]: <https://www.kaggle.com/code/gabydel1982/telco-customer-churn-logisticregression-untref>
+
+En función del objetivo del trabajo *"desarrollar una app de
+promoción"*, se buscará elaborar un modelo que permita predecir la
+probabilidad de que una aplicación sea popular en función de sus
+características, para contribuir en las decisiones sobre el desarrollo y
+estrategia de marketing de la App.
+
+Vamos a utilizar `df_popular`
+
+```{r}
+
+# Regresión logística
+library(caTools) #muestra
+library(MASS) #stepAIC
+
+df_popular %>% 
+  head(5) %>% 
+  gt()
+
+#Dividimos la base en train y validation
+set.seed(1120)
+indices = sample.split(df_popular$popular, SplitRatio = 0.7)
+train = df_popular[indices,]
+validation = df_popular[!(indices),]
+```
+
+#### Modelo 1
+
+```{r}
+# Primer modelo con todas las variables
+model_1 = glm(popular ~ ., data = train, family = "binomial")
+summary(model_1) 
+```
+
+Las variables con mayor significancia son "reviews", "type_bin",
+"rating_imp" y "category.xFINANCE". A continuación se muestra en una
+tabla las variables con significancia estadística del modelo 1:
+
+| **Variable**                  | **P-valor**           |
+|-------------------------------|-----------------------|
+| reviews                       | \< 0.0000000000000002 |
+| type_bin                      | \< 0.0000000000000002 |
+| rating_imp                    | 0.000000000256        |
+| category.xBOOKS_AND_REFERENCE | 0.000120              |
+| category.xBUSINESS            | 0.000003146100        |
+| category.xCOMICS              | 0.003096              |
+| category.xCOMMUNICATION       | 0.001129              |
+| category.xDATING              | 0.006090              |
+| category.xEVENTS              | 0.029426              |
+| category.xFAMILY              | 0.000304              |
+| category.xFINANCE             | 0.000000543376        |
+| category.xGAME                | 0.000801              |
+| category.xHEALTH_AND_FITNESS  | 0.002626              |
+| category.xLIBRARIES_AND_DEMO  | 0.045199              |
+| category.xLIFESTYLE           | 0.000064984971        |
+| category.xMAPS_AND_NAVIGATION | 0.002266              |
+| category.xMEDICAL             | 0.000008479370        |
+| category.xNEWS_AND_MAGAZINES  | 0.000208              |
+| category.xPERSONALIZATION     | 0.002230              |
+| category.xPRODUCTIVITY        | 0.001483              |
+| category.xSHOPPING            | 0.028897              |
+| category.xSOCIAL              | 0.000031306821        |
+| category.xSPORTS              | 0.000006654342        |
+| category.xTOOLS               | 0.001749              |
+| category.xTRAVEL_AND_LOCAL    | 0.004953              |
+| category.xVIDEO_PLAYERS       | 0.007778              |
+| grupo_edades.x17.             | 0.065640              |
+| grupo_edades.x4.              | 0.019739              |
+
+#### Modelo 2
+
+Se utilizará `stepAIC` para la selección de variables, se trata de un
+proceso iterativo que busca agregar o eliminar variables con el fin de
+obtener un subconjunto de variables que proporcione el modelo más
+óptimo. El modelo seleccionado es el que tiene el valor mínimo en el AIC
+
+```{r}
+#seleccionamos el método más optimo
+model_2<- stepAIC(model_1, direction = "backward", steps = 100)
+summary(model_2)
+```
+
+Las variables con el coeficiente el p-valor más alto son **`type_bin`**,
+**`reviews`**, **`category.xBOOKS_AND_REFERENCE`**,
+**`category.xBUSINESS`**, **`category.xCOMICS`**,
+**`category.xFINANCE`**, **`category.xSPORTS`**,
+**`category.xVIDEO_PLAYERS`** y **`category.xSOCIAL`**. Al mismo tiempo,
+**`category.xSHOPPING`**, **`category.xEVENTS`**, **`grupo_edades.x17`**
+y **`ano_act.x2014`** no son estadísticamente significativas por lo que
+podrían eliminarse del análisis.
+
+Se utilizará el **factor de inflación de la varianza (vif)** para
+eliminar los predictores redundantes o las variables que tienen una alta
+multicolinealidad entre ellos. El VIF mide la cantidad de varianza de
+una variable que se puede explicar por otras variables en el modelo. Un
+VIF de 1 indica que la variable no está correlacionada con otras
+variables en el modelo, mientras que un VIF superior a 1 indica que la
+variable está correlacionada con otras variables en el modelo.
+
+```{r}
+car::vif(model_2)
+```
+
+Se observa que la mayoría de las variables tienen un VIF entre 1 y 2, lo
+que sugiere que no hay una multicolinealidad importante presente en el
+modelo. De esta manera, *"un predictor que tiene un VIF de 2 o menos
+generalmente se considera seguro y se puede suponer que no está
+correlacionado con otras variables predictoras".*
+
+#### Modelo 3
+
+Se aplicará el modelo_2 sin las variables sin significancia estadística
+del `modelo_2` (**`category.xSHOPPING`**, **`category.xEVENTS`**,
+**`grupo_edades.x17`** y **`ano_act.x2014`**)
+
+```{r}
+model_3 <- glm(formula = popular ~ reviews + type_bin + rating_imp + category.xBOOKS_AND_REFERENCE + 
+    category.xBUSINESS + category.xCOMICS + category.xCOMMUNICATION  + category.xFAMILY + 
+    category.xFINANCE + category.xGAME + category.xHEALTH_AND_FITNESS + 
+    category.xLIFESTYLE + category.xMAPS_AND_NAVIGATION + category.xMEDICAL + 
+    category.xNEWS_AND_MAGAZINES + category.xPERSONALIZATION + 
+    category.xPRODUCTIVITY  + category.xSOCIAL + 
+    category.xSPORTS + category.xTOOLS + category.xTRAVEL_AND_LOCAL + 
+    category.xVIDEO_PLAYERS  + ano_act.x2016 + ano_act.x2017 + category.xDATING + grupo_edades.x4., family = "binomial", data = train)
+summary(model_3)
+car::vif(model_3)
+```
+
+\
+
+Respecto a los vectores de inflación todas las variables se encuentran
+entre 1 y 2. Se observa que `category.xDATING` y `grupo_edades.x4.` no
+tienen significancia estadística para un nivel de significancia del 5%
+por lo que se realizará un `modelo_4` sin estas variables:
+
+```{r}
+model_4 <- glm(formula = popular ~ reviews + type_bin + rating_imp + category.xBOOKS_AND_REFERENCE + 
+    category.xBUSINESS + category.xCOMICS + category.xCOMMUNICATION  + category.xFAMILY + 
+    category.xFINANCE + category.xGAME + category.xHEALTH_AND_FITNESS + 
+    category.xLIFESTYLE + category.xMAPS_AND_NAVIGATION + category.xMEDICAL + 
+    category.xNEWS_AND_MAGAZINES + category.xPERSONALIZATION + 
+    category.xPRODUCTIVITY  + category.xSOCIAL + 
+    category.xSPORTS + category.xTOOLS + category.xTRAVEL_AND_LOCAL + 
+    category.xVIDEO_PLAYERS  + ano_act.x2016 + ano_act.x2017, family = "binomial", data = train)
+
+summary(model_4)
+car::vif(model_4)
+```
+
+Todas las variables tienen significancia estadística en este último
+modelo
+
+```{r}
+# Obtener los residuos
+residuos <- residuals(model_4, type = "deviance")
+summary(residuos) 
+
+par(mfrow=c(1, 2))
+
+plot(model_3, main="Modelo 3", pch=19, cex=1, which=1)
+plot(model_4, main="Modelo 4", pch=19, cex=1, which=1)
+
+
+```
+
+Se puede observar que la media de los residuos es cercana a cero, lo que
+indica que el modelo tiene un buen ajuste en términos generales. Al
+mismo tiempo, hay valores extremos en los residuos, lo que puede indicar
+la presencia de valores atípicos o errores en el modelo. Se elegirá el
+`modelo_4` como modelo final.
+
+Analizamos los **Odds Ratio**
+
+```{r}
+final_model <- model_4
+
+#calculamos los ods ratio
+exp(coef(final_model))
+```
+
+El Odd Ratio indica cuántas veces más probable es que ocurra un evento
+dado (que la app sea popular), cuando se compara un cambio en una unidad
+de la variable `popular`.
+
+#### Evaluación del modelo
+
+```{r}
+pred <- predict(final_model, type = "response", newdata = validation)
+summary(pred)
+validation$prob <- pred
+
+# Using probability cutoff of 50%.
+
+pred_popular <- factor(ifelse(pred >= 0.50, "Yes", "No"))
+actual_popular <- factor(ifelse(validation$popular==1,"Yes","No"))
+table(actual_popular,pred_popular) 
+```
+
+Vamos a calcular la **sensibilidad**, la **especificidad** y
+**accuracy** con un corte de 0.50
+
+```{r}
+cutoff_popular <- factor(ifelse(pred >=0.50, "Yes", "No"))
+conf_final <- confusionMatrix(cutoff_popular, actual_popular, positive = "Yes")
+accuracy <- conf_final$overall[1]
+sensitivity <- conf_final$byClass[1]
+specificity <- conf_final$byClass[2]
+accuracy
+sensitivity
+specificity
+```
+
+La sensibilidad nos indica la capacidad de nuestro estimador para dar
+como casos positivos. En este caso, nuestro modelo tiene una
+sensibilidad de 0.92. La especificidad nos indica la capacidad de
+nuestro estimador para dar como casos negativos, el `model_4` posee un
+nivel de especificidad de 0.97, y, por último, Accuracy es lo que mide
+en base a la diagonal cuantos de las apps populares reales (0.94).
+
+```{r}
+perform_app <- function(cutoff) 
+{
+  predicted_popular <- factor(ifelse(pred >= cutoff, "Yes", "No"))
+  conf <- confusionMatrix(predicted_popular, actual_popular, positive = "Yes")
+  accuray <- conf$overall[1]
+  sensitivity <- conf$byClass[1]
+  specificity <- conf$byClass[2]
+  out <- t(as.matrix(c(sensitivity, specificity, accuray))) 
+  colnames(out) <- c("sensitivity", "specificity", "accuracy")
+  return(out)
+}
+
+
+options(repr.plot.width =8, repr.plot.height =6)
+summary(pred)
+s = seq(0.01,0.80,length=100)
+OUT = matrix(0,100,3)
+
+for(i in 1:100)
+{
+  OUT[i,] = perform_app(s[i])
+} 
+
+plot(s, OUT[,1],xlab="Cutoff",ylab="Value",cex.lab=1.5,cex.axis=1.5,ylim=c(0,1),
+     type="l",lwd=2,axes=FALSE,col=2)
+axis(1,seq(0,1,length=5),seq(0,1,length=5),cex.lab=1.5)
+axis(2,seq(0,1,length=5),seq(0,1,length=5),cex.lab=1.5)
+lines(s,OUT[,2],col="darkgreen",lwd=2)
+lines(s,OUT[,3],col=4,lwd=2)
+box()
+legend("bottom",col=c(2,"darkgreen",4,"darkred"),text.font =3,inset = 0.02,
+       box.lty=0,cex = 0.8, 
+       lwd=c(2,2,2,2),c("Sensitivity","Specificity","Accuracy"))
+abline(v = 0.32, col="red", lwd=1, lty=2)
+axis(1, at = seq(0.1, 1, by = 0.1))
+
+#cutoff <- s[which(abs(OUT[,1]-OUT[,2])<0.01)]
+```
+
+Según los resultados, el modelo es es capaz de predecir correctamente el
+94.9% de los casos.

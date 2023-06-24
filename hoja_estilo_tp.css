@@ -1,0 +1,13 @@
+﻿
+/*----------LOGO arriba del TOC---------*/
+
+#TOC::before {
+  content: "";
+  display: block;
+  height: 80px;
+  margin: 20px 20px 40px 20px;
+  background-image: url("https://s1.eestatic.com/2022/03/30/elandroidelibre/noticias-y-novedades/661193985_223108285_1024x576.jpg");
+  background-size: contain;
+  background-position: center center;
+  background-repeat: no-repeat;
+}
